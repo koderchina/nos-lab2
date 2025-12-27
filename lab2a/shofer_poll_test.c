@@ -67,7 +67,11 @@ void pollTask(unsigned int rw, char *argv[])
     char devPath[13];
     for (nfds_t j = 0; j < nfds; j++) {
         snprintf(devPath, sizeof(devPath), "/dev/shofer%d", (int)j);
-        pfds[j].fd = open(devPath, O_RDONLY);
+        if (rw == 0)
+            pfds[j].fd = open(devPath, O_RDONLY);
+        else
+            pfds[j].fd = open(devPath, O_WRONLY | O_NONBLOCK);
+        
         if (pfds[j].fd == -1)
             errExit("open");
         
@@ -90,7 +94,10 @@ void pollTask(unsigned int rw, char *argv[])
     // Keep calling poll() as long as at least one file descriptor is open
     while (num_open_fds && !stop) 
     {
-        printf("About to poll()\n");
+        if (rw == 1)
+            printf("\tAbout to poll()\n");
+        else
+            printf("About to poll()\n");
         ready = poll(pfds, nfds, -1);
         if (ready == -1)
         {
@@ -144,7 +151,14 @@ void pollTask(unsigned int rw, char *argv[])
         }
         if (rw == 1 && i > 0)
         {
+            printf("writable fds:\n");
+            for (int k = 0; k < i; ++k)
+            {
+                printf("%ld, ", writable[k]);
+            }
+            printf("\n");
             nfds_t rand_index = rand() % i; 
+            printf("rand_index: %ld\n", rand_index);
             s = write(pfds[writable[rand_index]].fd, &buf, sizeof(buf));
             if (s == -1)
                 if (errno == EINTR && stop)
@@ -153,7 +167,7 @@ void pollTask(unsigned int rw, char *argv[])
                     {
                         close(pfds[j].fd);
                     }
-                    printf("\nAll file descriptors closed; bye\n");
+                    printf("\n\tAll file descriptors closed; bye\n");
                     free(pfds);
                     break;
                 }
@@ -161,7 +175,7 @@ void pollTask(unsigned int rw, char *argv[])
             printf("    write %zd byte: %c\n", s, buf);
             sleep(5);
             i = 0;
-            memset(writable, 0, sizeof(writable));
+            memset(writable, -1, sizeof(writable));
         }
     }
 
@@ -169,7 +183,10 @@ void pollTask(unsigned int rw, char *argv[])
     {
         close(pfds[j].fd);
     }
-    printf("\nAll file descriptors closed; bye\n");
+    if (rw == 1)
+        printf("\n\tAll file descriptors closed; bye\n");
+    else
+        printf("\nAll file descriptors closed; bye\n");
     free(pfds);
 }
 
@@ -193,8 +210,7 @@ int main(int argc, char *argv[])
     {
         pollTask(0, argv);
         wait(NULL);
+        system("./unload_shofer");
     }
-    
-    system("./unload_shofer");
     return 0;
 }
