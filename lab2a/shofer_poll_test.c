@@ -7,12 +7,18 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
+#include <signal.h>
 #include <string.h>
+#include <time.h>
+#include <errno.h>
 
 #define errExit(msg)    do { perror(msg); exit(EXIT_FAILURE); \
                         } while (0)
+
+volatile sig_atomic_t stop = 0;
 
 void init(void)
 {
@@ -35,90 +41,160 @@ void init(void)
                major(st.st_rdev),
                minor(st.st_rdev));
 
-        mknod(str, S_IFCHR | 0666, dev);
+        //mknod(str, S_IFCHR | 0666, dev);
     }
 }
 
-void deinit(void) {system("./unload_shofer");}
-
-int main(int argc, char *argv[])
+void intHandler(int sig) 
 {
-    init();
+    stop = 1;
+}
 
-    /*
-    int fd = open(str, O_WRONLY | O_NONBLOCK);
-    char *msg = "hello dev\n";
-    write(fd, msg, strlen(msg));
-    close(fd);
-    */
-
-    deinit();
-    /*
+void pollTask(unsigned int rw, char *argv[])
+{
     int            ready;
-    char           buf[10];
+    char           buf;
     nfds_t         num_open_fds, nfds;
     ssize_t        s;
     struct pollfd  *pfds;
 
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s file...\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
-    num_open_fds = nfds = argc - 1;
+    num_open_fds = nfds = atoi(argv[1]);
     pfds = calloc(nfds, sizeof(struct pollfd));
     if (pfds == NULL)
         errExit("malloc");
 
     // Open each file on command line, and add it to 'pfds' array.
-
+    char devPath[13];
     for (nfds_t j = 0; j < nfds; j++) {
-        pfds[j].fd = open(argv[j + 1], O_RDONLY);
+        snprintf(devPath, sizeof(devPath), "/dev/shofer%d", (int)j);
+        pfds[j].fd = open(devPath, O_RDONLY);
         if (pfds[j].fd == -1)
             errExit("open");
-
-        printf("Opened \"%s\" on fd %d\n", argv[j + 1], pfds[j].fd);
-
-        pfds[j].events = POLLIN;
+        
+        if (rw == 1)
+            printf("\tOpened \"%s\" on fd %d\n", devPath, pfds[j].fd);
+        else
+            printf("Opened \"%s\" on fd %d\n", devPath, pfds[j].fd);
+        
+        if (rw == 0)
+        {
+            pfds[j].events = POLLIN;
+        }
+        else
+        {
+            pfds[j].events = POLLOUT;
+        }
+        
+        memset(devPath, 0, strlen(devPath));
     }
-
-    // Keep calling poll() as long as at least one file descriptor is
-        open.
-
-    while (num_open_fds > 0) {
+    // Keep calling poll() as long as at least one file descriptor is open
+    while (num_open_fds && !stop) 
+    {
         printf("About to poll()\n");
         ready = poll(pfds, nfds, -1);
         if (ready == -1)
-            errExit("poll");
-
+        {
+            if (errno == EINTR)
+            {
+                if (stop) {break;}
+                else continue;
+            }
+            else
+            {
+                errExit("poll");
+            }
+        }
         printf("Ready: %d\n", ready);
 
         // Deal with array returned by poll(). 
-
-        for (nfds_t j = 0; j < nfds; j++) {
-            if (pfds[j].revents != 0) {
-                printf("  fd=%d; events: %s%s%s\n", pfds[j].fd,
-                        (pfds[j].revents & POLLIN)  ? "POLLIN "  : "",
+        nfds_t writable[6] = {0};
+        int i = 0;
+        for (nfds_t j = 0; j < nfds; j++) 
+        {
+            if (pfds[j].revents != 0) 
+            {
+                if (rw == 0)
+                {
+                    printf("  fd=%d; events: %s%s%s\n", pfds[j].fd,
+                        (pfds[j].revents & POLLIN) ? "POLLIN "  : "",
                         (pfds[j].revents & POLLHUP) ? "POLLHUP " : "",
                         (pfds[j].revents & POLLERR) ? "POLLERR " : "");
-
-                if (pfds[j].revents & POLLIN) {
-                    s = read(pfds[j].fd, buf, sizeof(buf));
-                    if (s == -1)
-                        errExit("read");
-                    printf("    read %zd bytes: %.*s\n",
-                            s, (int) s, buf);
-                } else {                // POLLERR | POLLHUP 
-                    printf("    closing fd %d\n", pfds[j].fd);
-                    if (close(pfds[j].fd) == -1)
-                        errExit("close");
-                    num_open_fds--;
+                    if (pfds[j].revents & POLLIN)
+                    {
+                        s = read(pfds[j].fd, &buf, sizeof(buf));
+                        if (s == -1)
+                            errExit("read");
+                        printf("    read %zd byte: %c\n", s, buf);
+                    }
+                }
+                else if (rw == 1)
+                {
+                    printf("\t  fd=%d; events: %s%s%s\n", pfds[j].fd,
+                        (pfds[j].revents & POLLOUT) ? "POLLOUT " : "",
+                        (pfds[j].revents & POLLHUP) ? "POLLHUP " : "",
+                        (pfds[j].revents & POLLERR) ? "POLLERR " : "");
+                    buf = 'p';
+                    if (pfds[j].revents & POLLOUT)
+                    {
+                        writable[i] = j;
+                        i = i + 1;
+                    }
                 }
             }
         }
+        if (rw == 1 && i > 0)
+        {
+            nfds_t rand_index = rand() % i; 
+            s = write(pfds[writable[rand_index]].fd, &buf, sizeof(buf));
+            if (s == -1)
+                if (errno == EINTR && stop)
+                {
+                    for (nfds_t j = 0; j < nfds; j++)
+                    {
+                        close(pfds[j].fd);
+                    }
+                    printf("\nAll file descriptors closed; bye\n");
+                    free(pfds);
+                    break;
+                }
+                else errExit("write");
+            printf("    write %zd byte: %c\n", s, buf);
+            sleep(5);
+            i = 0;
+            memset(writable, 0, sizeof(writable));
+        }
     }
 
-    printf("All file descriptors closed; bye\n");
-    exit(EXIT_SUCCESS);
-    */
+    for (nfds_t j = 0; j < nfds; j++)
+    {
+        close(pfds[j].fd);
+    }
+    printf("\nAll file descriptors closed; bye\n");
+    free(pfds);
+}
+
+int main(int argc, char *argv[])
+{
+    init();
+    srand(time(NULL));
+    signal(SIGINT, intHandler);
+
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s DRIVER_NUM\n", argv[0]);
+        system("./unload_shofer");
+        exit(EXIT_FAILURE);
+    }
+
+    if (fork() == 0) 
+    {
+        pollTask(1, argv);
+    }
+    else 
+    {
+        pollTask(0, argv);
+        wait(NULL);
+    }
+    
+    system("./unload_shofer");
+    return 0;
 }
