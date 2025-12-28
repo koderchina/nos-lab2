@@ -362,7 +362,7 @@ static long control_ioctl (struct file *filp, unsigned int request, unsigned lon
 		{
 			retval = got;
 			klog(KERN_WARNING, "in_buff -> buff failed");
-			free(buff);
+			kfree(buff);
 			return retval;
 		}
 		got = kfifo_in(fifo_out, buff, cmd.count);
@@ -370,11 +370,11 @@ static long control_ioctl (struct file *filp, unsigned int request, unsigned lon
 		{
 			retval = got;
 			klog(KERN_WARNING, "in_buff -> buff failed");
-			free(buff);
+			kfree(buff);
 			return retval;
 		}
 		retval = got;
-		free(buff);
+		kfree(buff);
 	}
 	/* todo (similar to timer) */
 
