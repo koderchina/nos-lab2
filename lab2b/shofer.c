@@ -277,7 +277,7 @@ static ssize_t shofer_read(struct file *filp, char __user *ubuf, size_t count,
 
 	spin_lock(&out_buff->key);
 
-	dump_buffer("out_dev-end:out_buff:", out_buff);
+	dump_buffer("out_dev-start:out_buff:", out_buff);
 
 	retval = kfifo_to_user(fifo, (char __user *) ubuf, count, &copied);
 	if (retval)
@@ -304,15 +304,15 @@ static ssize_t shofer_write(struct file *filp, const char __user *ubuf,
 
 	spin_lock(&in_buff->key);
 
-	dump_buffer("out_dev-end:out_buff:", in_buff);
+	dump_buffer("in_dev-start:in_buff:", in_buff);
 
 	retval = kfifo_from_user(fifo, (char __user *) ubuf, count, &copied);
 	if (retval)
-		klog(KERN_WARNING, "kfifo_to_user failed");
+		klog(KERN_WARNING, "kfifo_from_user failed");
 	else
 		retval = copied;
 
-	dump_buffer("out_dev-end:out_buff:", in_buff);
+	dump_buffer("in_dev-end:in_buff:", in_buff);
 
 	spin_unlock(&in_buff->key);
 
@@ -354,28 +354,31 @@ static long control_ioctl (struct file *filp, unsigned int request, unsigned lon
 	}
 
 	/* copy cmd.count bytes from in_buff to out_buff */
-	if (!kfifo_is_empty(fifo_in))
+	got = 0;
+	int ret;
+	klog(KERN_WARNING, "IOCTL: in->out kopiranje");
+	dump_buffer("ioctl-start:in_buff", in_buff);
+	dump_buffer("ioctl-start:out_buff", out_buff);
+	spin_lock(&out_buff->key);
+	spin_lock(&in_buff->key);
+	while (got < cmd.count) 
 	{
-		void *buff = kmalloc(cmd.count, GFP_KERNEL);
-		got = kfifo_out(fifo_in, buff, cmd.count);
-		if (got != cmd.count)
-		{
-			retval = got;
-			klog(KERN_WARNING, "in_buff -> buff failed");
-			kfree(buff);
-			return retval;
-		}
-		got = kfifo_in(fifo_out, buff, cmd.count);
-		if (got != cmd.count)
-		{
-			retval = got;
-			klog(KERN_WARNING, "in_buff -> buff failed");
-			kfree(buff);
-			return retval;
-		}
-		retval = got;
-		kfree(buff);
+		if (kfifo_is_empty(fifo_in))
+			break;
+		if (kfifo_is_full(fifo_out))
+			break;
+
+		ret = kfifo_get(fifo_in, &c);
+		ret = kfifo_put(fifo_out, c);
+		got++;
 	}
+	spin_unlock(&in_buff->key);
+	spin_unlock(&out_buff->key);
+	LOG("IOCTL moved %d bytes from in to out", cmd.count);
+	dump_buffer("ioctl-end:in_buff", in_buff);
+	dump_buffer("ioctl-end:out_buff", out_buff);
+
+	retval = got;
 	/* todo (similar to timer) */
 
 	return retval;
@@ -390,7 +393,7 @@ static void timer_function(struct timer_list *t)
 	char c;
 	int got;
 
-	/* get locks on both buffers */
+	// get locks on both buffers 
 	spin_lock(&out_buff->key);
 	spin_lock(&in_buff->key);
 
@@ -403,17 +406,17 @@ static void timer_function(struct timer_list *t)
 			got = kfifo_put(fifo_out, c);
 			if (got)
 				LOG("timer moved '%c' from in to out", c);
-			else /* should't happen! */
+			else // should't happen! 
 				klog(KERN_WARNING, "kfifo_put failed");
 		}
-		else { /* should't happen! */
+		else { // should't happen!
 			klog(KERN_WARNING, "kfifo_get failed");
 		}
 	}
 	else {
 		LOG("timer: nothing in input buffer");
 		//for test: put '#' in output buffer
-		got = kfifo_put(fifo_out, '#');
+		//got = kfifo_put(fifo_out, '#');
 	}
 
 	dump_buffer("timer-end:in_buff", in_buff);
@@ -422,6 +425,6 @@ static void timer_function(struct timer_list *t)
 	spin_unlock(&in_buff->key);
 	spin_unlock(&out_buff->key);
 
-	/* reschedule timer for period */
+	// reschedule timer for period 
 	mod_timer(t, jiffies + msecs_to_jiffies(TIMER_PERIOD));
 }
